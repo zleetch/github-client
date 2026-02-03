@@ -1,12 +1,30 @@
 use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
 
 #[derive(Deserialize)]
 pub struct RepoResponse {
     pub full_name: String,
     pub html_url: String,
     pub default_branch: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct ApiErrorDetail {
+    resource: Option<String>,
+    field: Option<String>,
+    code: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct ApiError {
+    message: String,
+    errors: Option<Vec<ApiErrorDetail>>,
+    documentation_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -32,6 +50,11 @@ pub async fn generate_from_template(
         api_base.trim_end_matches('/'),
         template_owner,
         template_repo
+    );
+
+    info!(
+        "Generating repository '{}' from template '{}/{}'",
+        repo_name, template_owner, template_repo
     );
 
     let mut headers = HeaderMap::new();
@@ -63,22 +86,79 @@ pub async fn generate_from_template(
         include_all_branches,
     };
 
+    debug!(
+        "POST to GitHub API: include_all_branches={}, private={}",
+        include_all_branches, is_private
+    );
     let resp = client.post(url).json(&body).send().await?;
-    if resp.status().is_success() || resp.status().as_u16() == 201 {
+    let status = resp.status();
+    if status.is_success() || status.as_u16() == 201 {
         let repo: RepoResponse = resp.json().await?;
+        info!("Successfully created repository '{}'", repo.full_name);
         return Ok(repo);
     }
 
-    let status = resp.status();
+    // Try to decode structured error if possible
+    let content_type_is_json = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("application/json"))
+        .unwrap_or(false);
+
+    if content_type_is_json {
+        let api_err: ApiError = resp.json().await.unwrap_or(ApiError {
+            message: "Unknown error".to_string(),
+            errors: None,
+            documentation_url: None,
+        });
+        warn!("GitHub API error {}: {}", status, api_err.message);
+
+        let friendly = match status.as_u16() {
+            403 => "Forbidden: token lacks required permissions. Ensure fine-grained PAT has Administration: Read & write on your account and Contents: Read on the template (or use classic PAT with repo/public_repo).".to_string(),
+            404 => "Not found: template is not accessible or does not exist. Verify 'owner/repo' and that the repository is marked as a Template.".to_string(),
+            422 => {
+                if let Some(errors) = &api_err.errors {
+                    if errors.iter().any(|e| {
+                        e.code
+                            .as_deref()
+                            .map(|c| c.eq_ignore_ascii_case("already_exists"))
+                            .unwrap_or(false)
+                            || e.message
+                                .as_deref()
+                                .map(|m| m.to_lowercase().contains("already exists"))
+                                .unwrap_or(false)
+                    }) {
+                        "Validation failed: a repository with this name already exists. Choose a different repo_name.".to_string()
+                    } else {
+                        "Validation failed: check repo_name and inputs.".to_string()
+                    }
+                } else {
+                    "Validation failed: check repo_name and inputs.".to_string()
+                }
+            }
+            _ => format!("GitHub API error {}: {}", status, api_err.message),
+        };
+
+        let details = api_err
+            .errors
+            .as_ref()
+            .map(|v| format!(" details={:?}", v))
+            .unwrap_or_default();
+        return Err(anyhow!("{}{}", friendly, details));
+    }
+
+    // Fallback to plain text
     let text = resp
         .text()
         .await
         .unwrap_or_else(|_| "<no body>".to_string());
-    Err(anyhow!(
+    warn!("GitHub API error {}: {}", status, text.trim());
+    Err(anyhow!(format!(
         "GitHub API error (status {}): {}",
         status,
         text.trim()
-    ))
+    )))
 }
 
 fn split_template_name(template: &str) -> Result<(&str, &str)> {

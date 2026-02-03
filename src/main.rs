@@ -3,6 +3,8 @@ use std::env;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use github_client::RepoResponse;
+use tracing::{debug, info};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -42,7 +44,22 @@ struct Opts {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize logging with RUST_LOG or default to info
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .compact()
+        .try_init();
+
     let opts = Opts::parse();
+    info!("Starting GitHub template generation");
+    debug!(
+        "Parsed options: repo_name='{}', repo_type='{}', template='{}', branch={}",
+        opts.repo_name, opts.repo_type, opts.template_name, opts.branch
+    );
+
     let token = resolve_token(opts.token.as_deref())?;
     let is_private = opts.repo_type.eq_ignore_ascii_case("private");
 
@@ -62,6 +79,7 @@ async fn main() -> Result<()> {
         "{{\"full_name\":\"{}\",\"html_url\":\"{}\",\"default_branch\":\"{}\"}}",
         repo.full_name, repo.html_url, repo.default_branch
     );
+    info!("Repository created: {}", repo.full_name);
     Ok(())
 }
 
