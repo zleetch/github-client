@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cargo fmt (check)
+        run: cargo fmt --all --check
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cargo build
+        run: cargo build --all --all-features
+
+      - name: Cargo test
+        run: cargo test --all --all-features
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Cargo audit
+        run: cargo audit
+

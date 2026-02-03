@@ -1,0 +1,53 @@
+name: Create Repo from Template
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: "Name of the repository to create"
+        required: true
+        type: string
+      repo_desc:
+        description: "Description of the repository"
+        required: true
+        type: string
+      repo_type:
+        description: "Repository visibility"
+        required: true
+        type: choice
+        options:
+          - public
+          - private
+      template_name:
+        description: "Template in 'owner/repo' form"
+        required: true
+        type: string
+      branch:
+        description: "Include all branches from template"
+        required: true
+        type: boolean
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Create repository from template
+        env:
+          # Personal Access Token secret with permissions to create repos
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          REPO_NAME: ${{ inputs.repo_name }}
+          REPO_DESC: ${{ inputs.repo_desc }}
+          REPO_TYPE: ${{ inputs.repo_type }}
+          TEMPLATE_NAME: ${{ inputs.template_name }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          cargo run --release --
+
