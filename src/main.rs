@@ -40,6 +40,10 @@ struct Opts {
     /// GitHub token; falls back to GH_TOKEN if not set
     #[arg(long, env = "GITHUB_TOKEN")]
     token: Option<String>,
+
+    /// Apply branch protection to the default branch after creation
+    #[arg(long, env = "PROTECT_DEFAULT_BRANCH", default_value_t = true)]
+    protect_default_branch: bool,
 }
 
 #[tokio::main]
@@ -80,6 +84,24 @@ async fn main() -> Result<()> {
         repo.full_name, repo.html_url, repo.default_branch
     );
     info!("Repository created: {}", repo.full_name);
+
+    // Optionally apply branch protection to the default branch
+    if opts.protect_default_branch {
+        github_client::protect_branch(
+            &opts.api_base,
+            &token,
+            &repo.full_name,
+            &repo.default_branch,
+        )
+        .await
+        .context("Failed to apply branch protection")?;
+        info!(
+            "Branch protection applied on '{}:{}'",
+            repo.full_name, repo.default_branch
+        );
+    } else {
+        info!("Skipping branch protection as requested");
+    }
     Ok(())
 }
 

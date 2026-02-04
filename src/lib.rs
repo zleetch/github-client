@@ -178,6 +178,124 @@ fn split_template_name(template: &str) -> Result<(&str, &str)> {
     Ok((owner, repo))
 }
 
+#[derive(Serialize)]
+struct RequiredStatusChecks<'a> {
+    strict: bool,
+    contexts: &'a [String],
+}
+
+#[derive(Serialize)]
+struct RequiredPullRequestReviews {
+    required_approving_review_count: u8,
+    dismiss_stale_reviews: bool,
+    require_code_owner_reviews: bool,
+    require_last_push_approval: bool,
+}
+
+#[derive(Serialize)]
+struct BranchProtectionRequest<'a> {
+    required_status_checks: RequiredStatusChecks<'a>,
+    enforce_admins: bool,
+    required_pull_request_reviews: RequiredPullRequestReviews,
+    restrictions: Option<serde_json::Value>,
+    allow_force_pushes: bool,
+    allow_deletions: bool,
+    required_linear_history: bool,
+    block_creations: bool,
+    required_conversation_resolution: bool,
+    lock_branch: bool,
+    allow_fork_syncing: bool,
+}
+
+pub async fn protect_branch(
+    api_base: &str,
+    token: &str,
+    full_name: &str,
+    branch: &str,
+) -> Result<()> {
+    let (owner, repo) = split_template_name(full_name)?;
+    let url = format!(
+        "{}/repos/{}/{}/branches/{}/protection",
+        api_base.trim_end_matches('/'),
+        owner,
+        repo,
+        branch
+    );
+
+    info!(
+        "Applying branch protection to '{}/{}' (branch '{}')",
+        owner, repo, branch
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("github-client-rust/0.1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-github-api-version"),
+        HeaderValue::from_static("2022-11-28"),
+    );
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+
+    let contexts: Vec<String> = Vec::new();
+    let body = BranchProtectionRequest {
+        required_status_checks: RequiredStatusChecks {
+            strict: true,
+            contexts: &contexts,
+        },
+        enforce_admins: true,
+        required_pull_request_reviews: RequiredPullRequestReviews {
+            required_approving_review_count: 1,
+            dismiss_stale_reviews: true,
+            require_code_owner_reviews: false,
+            require_last_push_approval: true,
+        },
+        restrictions: None,
+        allow_force_pushes: false,
+        allow_deletions: false,
+        required_linear_history: true,
+        block_creations: false,
+        required_conversation_resolution: true,
+        lock_branch: false,
+        allow_fork_syncing: false,
+    };
+
+    debug!("PUT branch protection payload prepared");
+    let resp = client.put(url).json(&body).send().await?;
+    let status = resp.status();
+    if status.is_success() {
+        info!("Branch protection applied");
+        return Ok(());
+    }
+
+    let text = resp
+        .text()
+        .await
+        .unwrap_or_else(|_| "<no body>".to_string());
+    warn!(
+        "Failed to apply branch protection {}: {}",
+        status,
+        text.trim()
+    );
+    Err(anyhow!(format!(
+        "Failed to apply branch protection (status {}): {}",
+        status,
+        text.trim()
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::split_template_name;

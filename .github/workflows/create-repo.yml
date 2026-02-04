@@ -26,6 +26,11 @@ on:
         description: "Include all branches from template"
         required: true
         type: boolean
+      protect_default_branch:
+        description: "Apply protection to the default branch after creation"
+        required: true
+        type: boolean
+        default: true
 
 jobs:
   create:
@@ -48,6 +53,7 @@ jobs:
           REPO_TYPE: ${{ inputs.repo_type }}
           TEMPLATE_NAME: ${{ inputs.template_name }}
           BRANCH: ${{ inputs.branch }}
+          PROTECT_DEFAULT_BRANCH: ${{ inputs.protect_default_branch }}
         run: |
           cargo run --release --
 
