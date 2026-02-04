@@ -387,6 +387,173 @@ async fn ensure_branch_exists(
     }
 }
 
+#[derive(Deserialize)]
+struct GitRef {
+    #[serde(rename = "object")]
+    obj: GitObject,
+}
+
+#[derive(Deserialize)]
+struct GitObject {
+    sha: String,
+}
+
+pub async fn create_branch_from_base(
+    api_base: &str,
+    token: &str,
+    full_name: &str,
+    base_branch: &str,
+    new_branch: &str,
+) -> Result<()> {
+    let (owner, repo) = split_template_name(full_name)?;
+    let base_ref_url = format!(
+        "{}/repos/{}/{}/git/ref/heads/{}",
+        api_base.trim_end_matches('/'),
+        owner,
+        repo,
+        base_branch
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("github-client-rust/0.1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-github-api-version"),
+        HeaderValue::from_static("2022-11-28"),
+    );
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers.clone())
+        .build()?;
+
+    // Get base branch SHA
+    let base_resp = client.get(&base_ref_url).send().await?;
+    if !base_resp.status().is_success() {
+        let text = base_resp.text().await.unwrap_or_default();
+        return Err(anyhow!(format!(
+            "Failed to read base branch '{}': {}",
+            base_branch, text
+        )));
+    }
+    let base_ref: GitRef = base_resp.json().await?;
+    let sha = base_ref.obj.sha;
+
+    // Create new ref
+    let create_ref_url = format!(
+        "{}/repos/{}/{}/git/refs",
+        api_base.trim_end_matches('/'),
+        owner,
+        repo
+    );
+    let payload = serde_json::json!({
+        "ref": format!("refs/heads/{}", new_branch),
+        "sha": sha
+    });
+    let create_resp = client.post(create_ref_url).json(&payload).send().await?;
+    if create_resp.status().is_success() || create_resp.status().as_u16() == 201 {
+        info!("Created branch '{}'", new_branch);
+        Ok(())
+    } else {
+        let text = create_resp.text().await.unwrap_or_default();
+        Err(anyhow!(format!(
+            "Failed to create branch '{}': {}",
+            new_branch, text
+        )))
+    }
+}
+
+#[derive(Serialize)]
+struct DeploymentBranchPolicy {
+    protected_branches: bool,
+    custom_branch_policies: bool,
+}
+
+#[derive(Serialize)]
+struct EnvironmentRequest {
+    deployment_branch_policy: DeploymentBranchPolicy,
+}
+
+pub async fn ensure_environment_with_branches(
+    api_base: &str,
+    token: &str,
+    full_name: &str,
+    env_name: &str,
+    allowed_patterns: &[&str],
+) -> Result<()> {
+    let (owner, repo) = split_template_name(full_name)?;
+    let base = api_base.trim_end_matches('/');
+    let env_url = format!(
+        "{}/repos/{}/{}/environments/{}",
+        base, owner, repo, env_name
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("github-client-rust/0.1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-github-api-version"),
+        HeaderValue::from_static("2022-11-28"),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers.clone())
+        .build()?;
+
+    // Enable custom branch policies
+    let body = EnvironmentRequest {
+        deployment_branch_policy: DeploymentBranchPolicy {
+            protected_branches: false,
+            custom_branch_policies: true,
+        },
+    };
+    let resp = client.put(&env_url).json(&body).send().await?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(format!(
+            "Failed to create/update environment '{}': {}",
+            env_name, text
+        )));
+    }
+
+    // Add allowed branch patterns
+    let policy_url = format!("{}/deployment-branch-policies", env_url);
+    for pat in allowed_patterns {
+        let payload = serde_json::json!({ "name": pat });
+        let add = client.post(&policy_url).json(&payload).send().await?;
+        if !add.status().is_success() && add.status().as_u16() != 201 {
+            let text = add.text().await.unwrap_or_default();
+            warn!(
+                "Failed to add branch policy '{}' to env '{}': {}",
+                pat, env_name, text
+            );
+        } else {
+            info!(
+                "Environment '{}' allows branches matching '{}'",
+                env_name, pat
+            );
+        }
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::split_template_name;

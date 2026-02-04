@@ -102,6 +102,57 @@ async fn main() -> Result<()> {
     } else {
         info!("Skipping branch protection as requested");
     }
+
+    // Auto-setup gitflow and environments for service-* templates
+    if opts
+        .template_name
+        .rsplit('/')
+        .next()
+        .map(|n| n.starts_with("service-"))
+        .unwrap_or(false)
+    {
+        info!("Detected service-* template; setting up gitflow branches and environments");
+        // Create 'dev' branch from default
+        github_client::create_branch_from_base(
+            &opts.api_base,
+            &token,
+            &repo.full_name,
+            &repo.default_branch,
+            "dev",
+        )
+        .await
+        .context("Failed to create 'dev' branch")?;
+
+        // Protect 'dev' branch as well
+        if opts.protect_default_branch {
+            github_client::protect_branch(&opts.api_base, &token, &repo.full_name, "dev")
+                .await
+                .context("Failed to protect 'dev' branch")?;
+        }
+
+        // Environments
+        github_client::ensure_environment_with_branches(
+            &opts.api_base,
+            &token,
+            &repo.full_name,
+            "dev",
+            &["dev", "feature/*", "hotfix/*"],
+        )
+        .await
+        .context("Failed to configure 'dev' environment")?;
+
+        github_client::ensure_environment_with_branches(
+            &opts.api_base,
+            &token,
+            &repo.full_name,
+            "release",
+            &["release/*", "main"],
+        )
+        .await
+        .context("Failed to configure 'release' environment")?;
+
+        info!("Gitflow branches and environments configured");
+    }
     Ok(())
 }
 
