@@ -57,6 +57,65 @@ async fn protects_branch_successfully() {
 }
 
 #[tokio::test]
+async fn protects_branch_with_checks_sets_contexts() {
+    let server = MockServer::start();
+    let owner = "me";
+    let repo = "new-repo";
+    let branch = "main";
+    let token = "testtoken";
+
+    // Branch exists
+    let _branch_200 = server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/repos/{}/{}/branches/{}", owner, repo, branch));
+        then.status(200).json_body_obj(&serde_json::json!({
+            "name": branch
+        }));
+    });
+
+    let _m = server.mock(|when, then| {
+        when.method(PUT)
+            .path(format!(
+                "/repos/{}/{}/branches/{}/protection",
+                owner, repo, branch
+            ))
+            .json_body_obj(&serde_json::json!({
+                "required_status_checks": {
+                    "strict": true,
+                    "contexts": ["branch-policy"]
+                },
+                "enforce_admins": true,
+                "required_pull_request_reviews": {
+                    "required_approving_review_count": 1,
+                    "dismiss_stale_reviews": true,
+                    "require_code_owner_reviews": false,
+                    "require_last_push_approval": true
+                },
+                "restrictions": null,
+                "allow_force_pushes": false,
+                "allow_deletions": false,
+                "required_linear_history": true,
+                "block_creations": false,
+                "required_conversation_resolution": true,
+                "lock_branch": false,
+                "allow_fork_syncing": false
+            }));
+        then.status(200);
+    });
+
+    let api_base = server.base_url();
+    let res = github_client::protect_branch_with_checks(
+        &api_base,
+        token,
+        &format!("{}/{}", owner, repo),
+        branch,
+        &["branch-policy"],
+    )
+    .await;
+    assert!(res.is_ok());
+}
+
+#[tokio::test]
 async fn protect_branch_returns_error_on_forbidden() {
     let server = MockServer::start();
     let owner = "me";

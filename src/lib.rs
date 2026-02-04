@@ -300,6 +300,99 @@ pub async fn protect_branch(
     )))
 }
 
+pub async fn protect_branch_with_checks(
+    api_base: &str,
+    token: &str,
+    full_name: &str,
+    branch: &str,
+    required_contexts: &[&str],
+) -> Result<()> {
+    let (owner, repo) = split_template_name(full_name)?;
+    let url = format!(
+        "{}/repos/{}/{}/branches/{}/protection",
+        api_base.trim_end_matches('/'),
+        owner,
+        repo,
+        branch
+    );
+
+    info!(
+        "Applying branch protection (with checks) to '{}/{}' (branch '{}'): {:?}",
+        owner, repo, branch, required_contexts
+    );
+
+    // Ensure branch exists
+    ensure_branch_exists(api_base, token, full_name, branch, Duration::from_secs(30)).await?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("github-client-rust/0.1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-github-api-version"),
+        HeaderValue::from_static("2022-11-28"),
+    );
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+
+    let contexts_vec: Vec<String> = required_contexts.iter().map(|s| s.to_string()).collect();
+    let body = BranchProtectionRequest {
+        required_status_checks: RequiredStatusChecks {
+            strict: true,
+            contexts: &contexts_vec,
+        },
+        enforce_admins: true,
+        required_pull_request_reviews: RequiredPullRequestReviews {
+            required_approving_review_count: 1,
+            dismiss_stale_reviews: true,
+            require_code_owner_reviews: false,
+            require_last_push_approval: true,
+        },
+        restrictions: None,
+        allow_force_pushes: false,
+        allow_deletions: false,
+        required_linear_history: true,
+        block_creations: false,
+        required_conversation_resolution: true,
+        lock_branch: false,
+        allow_fork_syncing: false,
+    };
+
+    debug!("PUT branch protection (with checks) payload prepared");
+    let resp = client.put(url).json(&body).send().await?;
+    let status = resp.status();
+    if status.is_success() {
+        info!("Branch protection (with checks) applied");
+        return Ok(());
+    }
+
+    let text = resp
+        .text()
+        .await
+        .unwrap_or_else(|_| "<no body>".to_string());
+    warn!(
+        "Failed to apply branch protection (with checks) {}: {}",
+        status,
+        text.trim()
+    );
+    Err(anyhow!(format!(
+        "Failed to apply branch protection (with checks) (status {}): {}",
+        status,
+        text.trim()
+    )))
+}
+
 async fn ensure_branch_exists(
     api_base: &str,
     token: &str,

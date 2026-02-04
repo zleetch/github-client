@@ -23,11 +23,11 @@ on:
         required: true
         type: string
       branch:
-        description: "Include all branches from template"
+        description: "Include all branches from template (GitHub Template: include_all_branches)"
         required: true
         type: boolean
       protect_default_branch:
-        description: "Apply protection to the default branch after creation"
+        description: "Protect default branch; for service-* templates this also enables branch-policy checks"
         required: true
         type: boolean
         default: true

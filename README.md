@@ -78,5 +78,3 @@ When the template repository name starts with `service-` (e.g., `service-golang`
   - `release` environment allows branches `release/*`, `main`.
 
 This makes it easy to follow a GitFlow-style workflow across service repositories created from standard service templates.
-
-

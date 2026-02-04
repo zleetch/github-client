@@ -87,14 +87,34 @@ async fn main() -> Result<()> {
 
     // Optionally apply branch protection to the default branch
     if opts.protect_default_branch {
-        github_client::protect_branch(
-            &opts.api_base,
-            &token,
-            &repo.full_name,
-            &repo.default_branch,
-        )
-        .await
-        .context("Failed to apply branch protection")?;
+        // For service-* templates, require branch-policy status check
+        let is_service = opts
+            .template_name
+            .rsplit('/')
+            .next()
+            .map(|n| n.starts_with("service-"))
+            .unwrap_or(false);
+
+        if is_service {
+            github_client::protect_branch_with_checks(
+                &opts.api_base,
+                &token,
+                &repo.full_name,
+                &repo.default_branch,
+                &["branch-policy"],
+            )
+            .await
+            .context("Failed to apply branch protection with checks")?;
+        } else {
+            github_client::protect_branch(
+                &opts.api_base,
+                &token,
+                &repo.full_name,
+                &repo.default_branch,
+            )
+            .await
+            .context("Failed to apply branch protection")?;
+        }
         info!(
             "Branch protection applied on '{}:{}'",
             repo.full_name, repo.default_branch
@@ -125,9 +145,15 @@ async fn main() -> Result<()> {
 
         // Protect 'dev' branch as well
         if opts.protect_default_branch {
-            github_client::protect_branch(&opts.api_base, &token, &repo.full_name, "dev")
-                .await
-                .context("Failed to protect 'dev' branch")?;
+            github_client::protect_branch_with_checks(
+                &opts.api_base,
+                &token,
+                &repo.full_name,
+                "dev",
+                &["branch-policy"],
+            )
+            .await
+            .context("Failed to protect 'dev' branch")?;
         }
 
         // Environments
