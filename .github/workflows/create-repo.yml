@@ -48,6 +48,8 @@ jobs:
         env:
           # Personal Access Token secret with permissions to create repos
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          RUST_LOG: info
+          CARGO_TERM_COLOR: always
           REPO_NAME: ${{ inputs.repo_name }}
           REPO_DESC: ${{ inputs.repo_desc }}
           REPO_TYPE: ${{ inputs.repo_type }}
