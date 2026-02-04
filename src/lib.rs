@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
+use tokio::time::{sleep, Duration};
 use tracing::{debug, info, warn};
 
 #[derive(Deserialize)]
@@ -227,6 +228,9 @@ pub async fn protect_branch(
         owner, repo, branch
     );
 
+    // Wait for the branch to exist (new repos can be slightly delayed)
+    ensure_branch_exists(api_base, token, full_name, branch, Duration::from_secs(30)).await?;
+
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
@@ -294,6 +298,93 @@ pub async fn protect_branch(
         status,
         text.trim()
     )))
+}
+
+async fn ensure_branch_exists(
+    api_base: &str,
+    token: &str,
+    full_name: &str,
+    branch: &str,
+    max_wait: Duration,
+) -> Result<()> {
+    let (owner, repo) = split_template_name(full_name)?;
+    let url = format!(
+        "{}/repos/{}/{}/branches/{}",
+        api_base.trim_end_matches('/'),
+        owner,
+        repo,
+        branch
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("github-client-rust/0.1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-github-api-version"),
+        HeaderValue::from_static("2022-11-28"),
+    );
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+
+    let start = tokio::time::Instant::now();
+    let mut delay = Duration::from_millis(400);
+    loop {
+        let resp = client.get(&url).send().await?;
+        match resp.status().as_u16() {
+            200 => {
+                debug!("Branch '{}' is available", branch);
+                return Ok(());
+            }
+            404 => {
+                if start.elapsed() >= max_wait {
+                    return Err(anyhow!(
+                        "Default branch '{}' was not found within {:?}",
+                        branch,
+                        max_wait
+                    ));
+                }
+                debug!("Branch '{}' not found yet, retrying...", branch);
+                sleep(delay).await;
+                delay = std::cmp::min(delay * 2, Duration::from_secs(2));
+            }
+            401 | 403 => {
+                let text = resp.text().await.unwrap_or_default();
+                return Err(anyhow!(
+                    "Insufficient permission to check branch existence: {}",
+                    text
+                ));
+            }
+            code => {
+                let text = resp.text().await.unwrap_or_default();
+                warn!(
+                    "Unexpected response {} while checking branch: {}",
+                    code, text
+                );
+                if start.elapsed() >= max_wait {
+                    return Err(anyhow!(
+                        "Failed to confirm branch existence within {:?}: {} {}",
+                        max_wait,
+                        code,
+                        text
+                    ));
+                }
+                sleep(delay).await;
+                delay = std::cmp::min(delay * 2, Duration::from_secs(2));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

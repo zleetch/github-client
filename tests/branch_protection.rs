@@ -9,6 +9,15 @@ async fn protects_branch_successfully() {
     let branch = "main";
     let token = "testtoken";
 
+    // Branch exists (successful check)
+    let _branch_200 = server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/repos/{}/{}/branches/{}", owner, repo, branch));
+        then.status(200).json_body_obj(&serde_json::json!({
+            "name": branch
+        }));
+    });
+
     let _m = server.mock(|when, then| {
         when.method(PUT)
             .path(format!(
