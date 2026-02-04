@@ -27,7 +27,7 @@ async fn creates_repo_successfully() {
                 "full_name": format!("{}/{}", owner, repo_name),
                 "html_url": format!("https://github.com/{}/{}", owner, repo_name),
                 "default_branch": "main"
-            }));
+        }));
     });
 
     let api_base = server.base_url();
