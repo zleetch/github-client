@@ -44,6 +44,10 @@ struct Opts {
     /// Apply branch protection to the default branch after creation
     #[arg(long, env = "PROTECT_DEFAULT_BRANCH", default_value_t = true)]
     protect_default_branch: bool,
+
+    /// Override source for seeding service-* scaffolding (default: <owner>/service-template)
+    #[arg(long, env = "SERVICE_TEMPLATE_REPO")]
+    service_template_repo: Option<String>,
 }
 
 #[tokio::main]
@@ -85,16 +89,44 @@ async fn main() -> Result<()> {
     );
     info!("Repository created: {}", repo.full_name);
 
+    // Detect service-* template name
+    let is_service = opts
+        .template_name
+        .rsplit('/')
+        .next()
+        .map(|n| n.starts_with("service-"))
+        .unwrap_or(false);
+
+    // If service-*, seed terraform/ and helm/ from service-template before branch protection/dev creation
+    if is_service {
+        let owner = repo
+            .full_name
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        let source_full_name = opts
+            .service_template_repo
+            .clone()
+            .unwrap_or_else(|| format!("{}/service-template", owner));
+        info!(
+            "Seeding 'terraform/' and 'helm/' from {} into {}",
+            source_full_name, repo.full_name
+        );
+        github_client::copy_dirs_from_repo(
+            &opts.api_base,
+            &token,
+            &source_full_name,
+            &repo.full_name,
+            &repo.default_branch,
+            &["terraform/", "helm/", "kustomize/"],
+        )
+        .await
+        .context("Failed to seed content from service-template")?;
+    }
+
     // Optionally apply branch protection to the default branch
     if opts.protect_default_branch {
-        // For service-* templates, require branch-policy status check
-        let is_service = opts
-            .template_name
-            .rsplit('/')
-            .next()
-            .map(|n| n.starts_with("service-"))
-            .unwrap_or(false);
-
         if is_service {
             github_client::protect_branch_with_checks(
                 &opts.api_base,

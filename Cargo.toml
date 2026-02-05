@@ -19,4 +19,3 @@ bytes = ">=1.11.1, <2"
 
 [dev-dependencies]
 httpmock = "0.8"
-

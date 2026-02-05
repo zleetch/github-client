@@ -647,6 +647,176 @@ pub async fn ensure_environment_with_branches(
     }
     Ok(())
 }
+
+#[derive(Deserialize)]
+struct TreeEntry {
+    path: String,
+    r#type: String,
+    sha: String,
+}
+
+#[derive(Deserialize)]
+struct GitTree {
+    tree: Vec<TreeEntry>,
+}
+
+#[derive(Deserialize)]
+struct RepoInfo {
+    default_branch: String,
+}
+
+#[derive(Deserialize)]
+struct Blob {
+    content: String,
+    encoding: String,
+}
+
+pub async fn get_repo_default_branch(
+    api_base: &str,
+    token: &str,
+    full_name: &str,
+) -> Result<String> {
+    let (owner, repo) = split_template_name(full_name)?;
+    let url = format!(
+        "{}/repos/{}/{}",
+        api_base.trim_end_matches('/'),
+        owner,
+        repo
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("github-client-rust/0.1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-github-api-version"),
+        HeaderValue::from_static("2022-11-28"),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+    let resp = client.get(url).send().await?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(format!(
+            "Failed to read repo info for '{}': {}",
+            full_name, text
+        )));
+    }
+    let info: RepoInfo = resp.json().await?;
+    Ok(info.default_branch)
+}
+
+pub async fn copy_dirs_from_repo(
+    api_base: &str,
+    token: &str,
+    source_full_name: &str,
+    target_full_name: &str,
+    target_branch: &str,
+    dir_prefixes: &[&str],
+) -> Result<()> {
+    let (src_owner, src_repo) = split_template_name(source_full_name)?;
+    let (dst_owner, dst_repo) = split_template_name(target_full_name)?;
+    let source_default = get_repo_default_branch(api_base, token, source_full_name).await?;
+    let base = api_base.trim_end_matches('/');
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("github-client-rust/0.1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-github-api-version"),
+        HeaderValue::from_static("2022-11-28"),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers.clone())
+        .build()?;
+
+    // Fetch source tree recursively
+    let tree_url = format!(
+        "{}/repos/{}/{}/git/trees/{}?recursive=1",
+        base, src_owner, src_repo, source_default
+    );
+    let tree_resp = client.get(&tree_url).send().await?;
+    if !tree_resp.status().is_success() {
+        let text = tree_resp.text().await.unwrap_or_default();
+        return Err(anyhow!(format!("Failed to read source tree: {}", text)));
+    }
+    let tree: GitTree = tree_resp.json().await?;
+
+    for entry in tree.tree.iter().filter(|e| e.r#type == "blob") {
+        if !dir_prefixes.iter().any(|p| entry.path.starts_with(p)) {
+            continue;
+        }
+        // Fetch blob
+        let blob_url = format!(
+            "{}/repos/{}/{}/git/blobs/{}",
+            base, src_owner, src_repo, entry.sha
+        );
+        let blob_resp = client.get(&blob_url).send().await?;
+        if !blob_resp.status().is_success() {
+            let text = blob_resp.text().await.unwrap_or_default();
+            warn!("Failed to fetch blob for '{}': {}", entry.path, text);
+            continue;
+        }
+        let blob: Blob = blob_resp.json().await?;
+        if blob.encoding.to_lowercase() != "base64" {
+            warn!(
+                "Unexpected blob encoding for '{}': {}",
+                entry.path, blob.encoding
+            );
+            continue;
+        }
+        let content_b64 = blob.content.replace('\n', "");
+
+        // Skip if exists
+        let get_content_url = format!(
+            "{}/repos/{}/{}/contents/{}?ref={}",
+            base, dst_owner, dst_repo, entry.path, target_branch
+        );
+        let exists = client.get(&get_content_url).send().await?;
+        if exists.status().is_success() {
+            debug!("Skipping existing '{}'", entry.path);
+            continue;
+        }
+
+        // PUT file
+        let put_url = format!(
+            "{}/repos/{}/{}/contents/{}",
+            base, dst_owner, dst_repo, entry.path
+        );
+        let payload = serde_json::json!({
+            "message": format!("chore: seed {} from service-template", entry.path),
+            "content": content_b64,
+            "branch": target_branch
+        });
+        let put_resp = client.put(&put_url).json(&payload).send().await?;
+        if !put_resp.status().is_success() && put_resp.status().as_u16() != 201 {
+            let text = put_resp.text().await.unwrap_or_default();
+            warn!("Failed to write '{}': {}", entry.path, text);
+        } else {
+            info!("Seeded '{}'", entry.path);
+        }
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::split_template_name;

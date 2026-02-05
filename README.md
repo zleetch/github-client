@@ -78,3 +78,10 @@ When the template repository name starts with `service-` (e.g., `service-golang`
   - `release` environment allows branches `release/*`, `main`.
 
 This makes it easy to follow a GitFlow-style workflow across service repositories created from standard service templates.
+
+### Service templates: bootstrap files
+- If the template name starts with `service-`, the CLI seeds the new repository by copying folders from a `service-template` repository:
+  - `terraform/`, `helm/`, `kustomize/`
+- By default it looks for `<owner>/service-template`. You can override with:
+  - Flag: `--service-template-repo otherOwner/service-template`
+  - Env: `SERVICE_TEMPLATE_REPO=otherOwner/service-template`

@@ -30,6 +30,10 @@ on:
         description: "Protect default branch; for service-* templates this also enables branch-policy checks"
         required: true
         type: boolean
+      service_template_repo:
+        description: "Override source repo for seeding terraform/, helm/, kustomize/ (default: <owner>/service-template)"
+        required: false
+        type: string
         default: true
 
 jobs:
@@ -56,6 +60,7 @@ jobs:
           TEMPLATE_NAME: ${{ inputs.template_name }}
           BRANCH: ${{ inputs.branch }}
           PROTECT_DEFAULT_BRANCH: ${{ inputs.protect_default_branch }}
+          SERVICE_TEMPLATE_REPO: ${{ inputs.service_template_repo }}
         run: |
           cargo run --release --
 
