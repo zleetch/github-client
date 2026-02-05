@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
             .clone()
             .unwrap_or_else(|| format!("{}/service-template", owner));
         info!(
-            "Seeding 'terraform/' and 'helm/' from {} into {}",
+            "Seeding 'terraform/', 'helm/', and 'kustomize/' from {} into {}",
             source_full_name, repo.full_name
         );
         github_client::copy_dirs_from_repo(
